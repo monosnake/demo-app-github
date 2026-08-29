@@ -1,0 +1,71 @@
+# Vault-backed pipeline: authenticates to Vault with the per-job OIDC token
+# (no static secret stored in GitHub) and consumes short-lived credentials.
+name: ci-vault
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  VAULT_ADDR: http://vault:8200
+
+jobs:
+  test-build-deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import secrets from Vault (OIDC login)
+        id: vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: http://vault:8200
+          method: jwt
+          path: jwt-github
+          role: demo-app
+          jwtGithubAudience: https://github.com/${{ github.repository_owner }}
+          secrets: |
+            kv/data/demo-app/build EXTERNAL_API_KEY | EXTERNAL_API_KEY ;
+            database/creds/demo-app-dynamic username | DB_USER ;
+            database/creds/demo-app-dynamic password | DB_PASSWORD ;
+            database/static-creds/app-static password | APP_STATIC_PASSWORD
+
+      # Integration tests run against PostgreSQL using the ephemeral
+      # credentials Vault just generated (they expire minutes later).
+      - name: Run tests with dynamic database credentials
+        env:
+          DB_USER: ${{ steps.vault.outputs.DB_USER }}
+          DB_PASSWORD: ${{ steps.vault.outputs.DB_PASSWORD }}
+          EXTERNAL_API_KEY: ${{ steps.vault.outputs.EXTERNAL_API_KEY }}
+        run: |
+          docker run --rm --network secrets-net \
+            -e DB_HOST=postgres -e DB_NAME=demo \
+            -e DB_USER -e DB_PASSWORD -e EXTERNAL_API_KEY \
+            -v "$PWD:/src" -w /src python:3.12-slim \
+            bash -c "pip install -q -r requirements.txt -r requirements-dev.txt && pytest -q"
+
+      - name: Build image
+        run: docker build -t demo-app:${GITHUB_SHA::7} -t demo-app:latest .
+
+      # Runtime injection: the rotated static credential enters the container
+      # as environment, never baked into the image or written to disk.
+      - name: Deploy container
+        env:
+          APP_STATIC_PASSWORD: ${{ steps.vault.outputs.APP_STATIC_PASSWORD }}
+        run: |
+          docker rm -f demo-app 2>/dev/null || true
+          docker run -d --name demo-app --network secrets-net \
+            -e DB_HOST=postgres -e DB_NAME=demo \
+            -e DB_USER=app_static -e DB_PASSWORD="$APP_STATIC_PASSWORD" \
+            demo-app:latest
+
+      - name: Smoke test deployment
+        run: |
+          sleep 3
+          docker run --rm --network secrets-net curlimages/curl:8.11.1 \
+            -sf http://demo-app:8000/messages

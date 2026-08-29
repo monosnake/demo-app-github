@@ -1,0 +1,38 @@
+# Baseline pipeline (traditional approach, kept for the experimental
+# comparison): long-lived credentials stored as GitHub Secrets and passed
+# around as plain environment variables.
+name: ci-baseline
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-build-deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests with static credentials
+        env:
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          EXTERNAL_API_KEY: ${{ secrets.EXTERNAL_API_KEY }}
+        run: |
+          docker run --rm --network secrets-net \
+            -e DB_HOST=postgres -e DB_NAME=demo \
+            -e DB_USER -e DB_PASSWORD -e EXTERNAL_API_KEY \
+            -v "$PWD:/src" -w /src python:3.12-slim \
+            bash -c "pip install -q -r requirements.txt -r requirements-dev.txt && pytest -q"
+
+      - name: Build image
+        run: docker build -t demo-app-baseline:latest .
+
+      - name: Deploy container
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          docker rm -f demo-app-baseline 2>/dev/null || true
+          docker run -d --name demo-app-baseline --network secrets-net \
+            -e DB_HOST=postgres -e DB_NAME=demo \
+            -e DB_USER=app_baseline -e DB_PASSWORD \
+            demo-app-baseline:latest
