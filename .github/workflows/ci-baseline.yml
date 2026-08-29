@@ -22,7 +22,7 @@ jobs:
             -e DB_HOST=postgres -e DB_NAME=demo \
             -e DB_USER -e DB_PASSWORD -e EXTERNAL_API_KEY \
             -v "$PWD:/src" -w /src python:3.12-slim \
-            bash -c "pip install -q -r requirements.txt -r requirements-dev.txt && pytest -q"
+            bash -c "pip install -q -r requirements.txt -r requirements-dev.txt && python -m pytest -q"
 
       - name: Build image
         run: docker build -t demo-app-baseline:latest .
