@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  VAULT_ADDR: http://vault:8200
+  VAULT_ADDR: https://vault:8200
 
 jobs:
   test-build-deploy:
@@ -24,7 +24,7 @@ jobs:
         id: vault
         uses: hashicorp/vault-action@v3
         with:
-          url: http://vault:8200
+          url: https://vault:8200
           method: jwt
           path: jwt-github
           role: demo-app
